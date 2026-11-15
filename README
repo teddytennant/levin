@@ -1,0 +1,228 @@
+levin
+
+A search harness for one hard, formally stated problem. You give it a Lean 4
+statement and a token budget. It keeps a tree of reductions Lean has checked,
+holds a belief about every node, and spends each task where it most raises the
+chance the statement gets settled. It stops with a certificate the Lean kernel
+has replayed, or with the budget spent.
+
+Every task is an agent running in an inlet cell
+(https://github.com/teddytennant/inlet), with no network and a metered model
+proxy. That is how one Claude subscription runs it: inlet's proxy sits in front
+of the subscription and charges each task against its own budget.
+
+
+How it searches
+
+A claim is a closed Lean proposition. A sketch is a way to prove a claim from
+lemmas: Lean must accept `theorem (h1 : L1) ... (hk : Lk) : claim := body`
+before the sketch exists. Its lemmas are claims too, keyed by their text, so a
+lemma two sketches need is one node and gets proved once. The root is P and
+not-P together, since an open problem may be false, or P with ANSWER filled in
+by each guessed value when the question asks for one.
+
+Four kinds of task:
+
+    prove      write a proof of the claim
+    falsify    look for a counterexample, with python, and prove the negation
+    decompose  write an informal proof, then a sketch
+    guess      propose a value for ANSWER
+
+Every new lemma gets a falsify task before anything else is spent on it, and
+those go first. Decompositions written by models are full of plausible lemmas
+that are false, and a false lemma takes down everything built on it. A prove
+task that finds its claim false can hand in a proof of the negation instead,
+and when a lemma is refuted its counterexample goes into the notes of every
+claim that needed it, so the next decompose knows why the last plan died.
+
+For each claim levin holds t, the chance it is true, and p, the chance one
+prove task lands if it is. p is a Beta that starts at `prove_rate` (the root
+uses `root_rate`, which is how you tell it the problem is hard) and counts
+failures. A failed proof is one observation with likelihood 1 - t*p, so t and
+p both drop; surviving a counterexample search raises t; a refuted lemma goes
+to 0. Lemma priors come from the credence the decomposer states for each one,
+capped at 0.9. Once every lemma of a sketch has survived its search, the claim
+is at least as likely true as all of them together, so its t is raised to
+their product and the other side of the root loses the same amount.
+
+S(c), the chance c gets proved, combines direct attempts (t times the chance
+`horizon` more of them land) with each sketch (the product of its lemmas) as
+if they were independent. S(root) adds the resolutions up. One backward pass
+gives dS(root)/dS(c) for every claim, and each possible task is scored as that
+gradient times what the task would add, times its chance of working, divided
+by its tokens. The best tasks fill the free slots, one per claim. That is
+steepest ascent on the chance of a resolution, per token.
+
+This is Levin search with beliefs in place of program lengths. Levin gives
+each candidate time in proportion to its prior and keeps going; levin gives
+each hypothesis (each claim, each way of splitting it) compute in proportion
+to its posterior value per token, and every verdict from Lean updates the
+posterior. Solomonoff's prior is not computable. The stand-in here is the
+problem file's priors and the model's own stated credences.
+
+S treats sketches and lemmas as independent. They are not: lemmas of one
+sketch tend to fail together when the approach is wrong. It is a scoring
+rule for where to look next, not a calibrated probability.
+
+A swarm of independent agents repeats the same failed ideas and throws away
+partial progress. Here partial progress is a checked reduction or a proved
+lemma that every later task can cite by name, failed attempts leave notes the
+next attempt on that claim reads, and false branches are cut early.
+
+
+What it trusts
+
+A worker controls a proof body, a sketch, or an answer, never the statement.
+levin writes the file around it. Before Lean runs, text is refused if it has
+a string or name literal or a `#`, declares anything, adds syntax or axioms,
+runs meta code, or sets an option other than heartbeats; lemma statements may
+not contain `by`. `autoImplicit` is off. Each lemma must elaborate as a Prop,
+and a sketch is refused if any one lemma gives the claim by `simpa` alone, so
+splitting cannot regress for free. A guessed answer must be an integer, or a
+fraction when the problem file sets "answer_type" to ℚ or ℝ: anything richer
+can restate the question (`sInf {n | P n}`) or splice into it. So questions
+whose answer is √2 or π/4 are out of reach of `guess`; state those as yes/no.
+
+The file is then compiled as a module and the module is replayed through
+the kernel by leanchecker. A second Lean process imports it, re-elaborates
+levin's own statement in a clean scope, checks the proved constant against
+it, and reads its axioms; nothing past propext, Classical.choice and
+Quot.sound passes. Whatever the worker's text did to its own scope stays in
+its module. The keyword filter is the cheap first layer and is known to be
+bypassable: in review, a `run_tac` hidden behind a `"--"` string added an
+unchecked `1 = 2` with `debug.skipKernelTC`. Strings are refused now, and the
+replay catches that declaration by itself either way (tests/test_check.py).
+
+The worker's own cell runs this gate so its retries get Lean's errors, but
+the worker can edit files there. So every artifact is judged again in a fresh
+cell from levin's own copy of the statement, and nothing a model wrote is
+compiled on the host. A judge that dies of something other than a verdict is
+asked again rather than counted. When the root closes, the proofs it depends
+on are assembled into cert.lean and judged the same way. "fresh": true in the
+problem file replays every import too, which for Mathlib takes hours.
+
+Lean's documentation names Comparator as the tool meant for hostile proofs.
+Before you believe a resolution of anything that matters, check cert.lean
+with Comparator against the statement, and have a person read the formal
+statement against the informal problem, and any guessed answer against the
+question. A fast resolution of an open problem is more likely a
+misformalized statement than a breakthrough.
+
+
+Install
+
+Python 3.8 or newer, nothing else from pip. inlet, and a Lean 4 toolchain whose
+`lean` and `leanchecker` are visible inside a cell (/nix/store or a path listed
+in the cell's `ro`). For a real problem, a lake project with Mathlib built, so
+that `lake env lean` works there; with elan, list ~/.elan in `ro` too.
+
+Against Mathlib v4.29.0 through `lake env`, one node (build, kernel replay of
+the module, statement and axioms in a second process) took 27 to 64 seconds
+and peaked at 6.1GB resident, which is why tasks default to `memory_mb` 8192.
+Mind that when choosing `slots`.
+
+    git clone https://github.com/teddytennant/levin
+    cd levin
+    python3 -m unittest discover tests       # LEVIN_LEAN=/path/to/lean runs the Lean tests too
+
+
+Run
+
+Two workers in the inlet policy: the agent that does the math, and a judge
+that does nothing itself, so its verifier (the gate) is the whole task.
+
+    cell    = { ro = { "/path/to/levin", "/path/to/mathlib-project" } }
+    workers = {
+      prover = { cmd = { ... any agent with a shell ... }, tags = { "math" }, net = "none" },
+      levin_check = { cmd = { "true" }, tags = { "math" }, net = "none" },
+    }
+
+inlet's docs/harnesses.md has working `cmd` lines for Claude Code, Pi, Wizard
+and others, and examples/claude-upstream.py puts a Claude login behind the
+proxy. Then a problem file:
+
+    {
+      "statement": "∀ n : ℕ, ...",
+      "preamble": "import Mathlib",
+      "truth": 0.5,
+      "root_rate": 0.001,
+      "lean": ["lake", "env", "lean"],
+      "leanchecker": ["lake", "env", "leanchecker"],
+      "lean_dir": "/path/to/mathlib-project",
+      "hints": "Mathlib source is at /path/to/mathlib-project/.lake/packages/mathlib.",
+      "budget": 20000000,
+      "tokens": {"prove": 400000, "falsify": 200000, "decompose": 400000},
+      "inlet": {"home": "~/.inlet", "slots": 2, "memory_mb": 8192}
+    }
+
+and
+
+    python3 -m levin init problem.json run/
+    python3 -m levin run run/
+    python3 -m levin show run/
+
+`run` can be killed and started again at any time. Everything is in
+run/events.jsonl and the tree is rebuilt from it; tasks still on inlet are
+collected when they finish. `show` prints the chance of a resolution, the next
+steps with their scores, and every claim.
+
+The other knobs, with their defaults, are at the top of levin/tree.py: lemma
+prior, prove rate, how much the priors weigh against evidence, horizon, depth,
+sketches per claim (only sketches with no refuted lemma count), lemmas per
+sketch. `catch` (the chance a falsify task finds a counterexample to a false
+claim) and `guess_value` are policy, not measurements; nothing learns them.
+`retries` (default 1) and `workers` (a worker per task kind, say a stronger
+model for decompose) go under "inlet". Only a verifier's no, a used-up budget, a timeout or a stall
+counts as evidence. A task that died some other way or used no tokens, which
+is what a rate-limited subscription looks like, changes no belief, and three
+in a row pause the run for 15 minutes.
+
+Budgets are in whatever the proxy meters. Through claude-upstream.py every
+call carries the CLI's own system prompt, about 28k tokens of it cached, so
+size budgets for that.
+
+
+Where to point it
+
+Start where answers are known, miniF2F or PutnamBench, and check that the
+priors are sane: the default `root_rate` of 0.3 is for an easy theorem. Then
+open problems that are already stated in Lean, such as
+github.com/google-deepmind/formal-conjectures, pinned to one commit. Put what
+the literature already says about the problem in "hints": some "open" problems
+turned out to be solved in a paper nobody had connected to them.
+
+
+Runs on this box
+
+Lean 4.29.0 from nixpkgs, Claude Sonnet through claude-upstream.py, inlet's
+examples/agent.py as the worker, two slots, no Mathlib.
+
+`∀ n : Nat, n * n % 4 = 0 ∨ n * n % 4 = 1`, as an open question (truth 0.5).
+Both sides were tried at once. The first try at the true side ran out of
+budget; the first try at the false side failed and moved belief to the true
+side; the second try at the true side landed. The judge accepted it, the
+leftover task on the false side was killed, and the certificate replayed.
+Four tasks, 418k metered tokens.
+
+`∀ a b : Nat, (a * a + b * b) % 4 ≠ 3` with `root_rate` 0.001, so a direct
+proof looked hopeless and the planner had to split it. Twice it did, by
+different routes. The first came back as
+
+    lemmas: ∀ n : Nat, n * n % 4 = 0 ∨ n * n % 4 = 1    (credence 0.99)
+    body:   by intro a b; have ha := h1 a; have hb := h1 b; omega
+
+Its lemma survived a counterexample search, was proved, and closed the
+root. Eight tasks, 862k tokens. A rerun after the gate was rebuilt closed it
+through its second sketch instead, whose lemma was the sharper
+`∀ n : Nat, (n * n) % 4 = n % 2`: six tasks, 437k.
+
+A fourth run, of the first problem on the finished code, had the task on the
+false side hand in a proof of ¬¬P instead: 52k tokens. It also found a bug:
+a second proof of an already settled root put a duplicate theorem in the
+certificate. With that fixed, `levin run` on the same directory rebuilt the tree
+from the log and certified it without new work.
+
+These are small, and the model could have proved both directly. What they
+show is the machinery: both sides of a question, beliefs moving on evidence,
+verified splits, falsify before prove, the judge in a fresh cell, killed
+leftovers, and a certificate the kernel replayed.
