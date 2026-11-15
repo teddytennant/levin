@@ -122,7 +122,7 @@ class Run:
         return f"python3 {self.cfg.get('check', CHECK)} claim.json"
 
     def start(self, kind, k, score=0.0):
-        notes = self.tree.claims[k]["notes"] if k in self.tree.claims else ""
+        notes = self.tree.claims[k]["notes"] if k in self.tree.claims and self.problem.get("notes", True) else ""
         goal = prompts.goal(self.tree, kind, k, self.cfg.get("check", CHECK))
         tokens = self.tree.cfg["tokens"][kind]
         worker = self.cfg.get("workers", {}).get(kind, self.cfg.get("worker", "prover"))

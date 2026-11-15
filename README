@@ -214,7 +214,7 @@ Whether weighing hypotheses beats more tries is a question for an
 experiment, not this README. The arms, all on one budget, on problems where a
 single attempt almost never lands:
 
-    best-of-N        "max_sketches": 0, "falsify": false
+    best-of-N        "max_sketches": 0, "falsify": false, "notes": false
     one long agent   "max_sketches": 0, "slots": 1, one huge "prove" budget
     levin            defaults
     no beliefs       "planner": "round_robin" (same task kinds, no gradient)
@@ -222,6 +222,33 @@ single attempt almost never lands:
 
 Report solve rate against tokens. The round-robin arm is the one that says
 whether the beliefs earn anything over lemma reuse and notes alone.
+
+bench/run.py runs the best-of-N, levin and round-robin arms on a file of
+statements, one budget for all three, and prints what each settled and what
+it spent. Two runs of it so far, core Lean 4.29 with no Mathlib, Claude Haiku
+through claude-upstream.py as the worker (inlet's examples/agent.py, 30
+turns), 1.2M tokens per arm, 200k per prove task:
+
+    statement                                    best-of-N    levin  round-robin
+    ∀ a b, (a*a + b*b) % 4 ≠ 3                    yes 27k   yes 15k     yes 24k
+    ∀ n, 6 ∣ n*(n+1)*(n+2)                        yes 22k   yes 35k     yes 10k
+    ∀ n, 3 ∣ n^3 + 2*n                            yes 15k   yes 20k     yes 11k
+    ∀ a b, (a*a + b*b) % 3 = 0 → a % 3 = 0        yes 19k   yes 17k     yes 19k
+    ∀ n, 30 ∣ n^5 - n                             yes 25k   yes 24k     yes 24k
+    ∀ a b c, a*a + b*b = c*c → 2 ∣ a*b            yes 47k   yes 32k     yes 20k
+
+    ∀ x y, x*x = 2*(y*y) → x = 0                  yes 46k   yes 74k     yes 26k
+    ∀ n, 4 ≤ n → n*n ≤ 2^n                        yes 24k   yes 29k     yes 35k
+    Σ i<n, i^3 = (Σ i<n, i)^2                     yes 33k   yes 59k     yes 27k
+    ∀ n > 1, n^4 + 4 has a proper factorization   yes 36k   yes 99k     yes 86k
+    6 Σ i≤n, i^2 = n(n+1)(2n+1)                   yes 150k  yes 142k    yes 65k
+    ∀ a b, 0 < b → a*a ≠ 3*(b*b)                  yes 30k   yes 64k     yes 22k
+
+Every arm settled every statement with its first task, so these runs say
+nothing about the planner: one attempt was enough, and the arms differ only
+by the luck of that one attempt. What they do show is that levin costs
+nothing extra when a direct proof lands. The comparison that matters needs
+problems a single attempt almost never solves.
 
 
 Where to point it
