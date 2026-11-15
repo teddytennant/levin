@@ -5,7 +5,7 @@
 
 claim.json is written by levin and says what is being checked:
 
-    kind       prove | sketch | prop | cert
+    kind       prove | sketch | glue | prop | score | cert
     preamble   imports and opens
     statement  the Lean proposition (for prop, with ANSWER in it)
     negation   for prove, the statement's negation
@@ -13,10 +13,14 @@ claim.json is written by levin and says what is being checked:
     leanchecker  command that runs leanchecker
     lean_dir   where to run them
     library    proved lemmas a proof may cite: [{"name", "text", "deps"}]
+    defs       definitions accepted so far: [{"name", "text"}]
+    lemmas     for glue, the sketch's lemmas
+    score      for score, {"cmd": [...], "file": "candidate.py"}
 
 The artifact sits beside it: proof.lean (the text after `:=`), or for prove
-negation.lean (a proof of the negation instead), sketch.json, answer.json, or
-cert.lean. Exit 0 means accepted.
+negation.lean (a proof of the negation instead), sketch.json (glue optional),
+glue.lean, answer.json, a search candidate, or cert.lean. Exit 0 means
+accepted; a score is printed as `score <number>`.
 
 What a worker wrote is compiled as a module, the module is replayed through
 the kernel by leanchecker, and its axioms are read by a second Lean process
@@ -44,6 +48,7 @@ DENY = {
 }
 OPTIONS = {"maxHeartbeats", "maxRecDepth", "synthInstance.maxHeartbeats"}
 ANSWER = re.compile(r"-?[0-9]+(/[0-9]+)?")
+DEF = re.compile(r"(?:noncomputable\s+)?(?:def|abbrev)\s+(d_[A-Za-z0-9_']*)\b")
 LEMMA = re.compile(r"\bL_[0-9a-f]{12}\b")
 
 
@@ -79,7 +84,28 @@ def normal(text):
 
 
 def header(claim):
-    return f"{claim['preamble']}\n\nset_option autoImplicit false\n\n"
+    defs = "".join(d["text"] + "\n\n" for d in claim.get("defs", []))
+    return f"{claim['preamble']}\n\nset_option autoImplicit false\n\n{defs}"
+
+
+def check_defs(claim, defs):
+    """New definitions a sketch brings: each one `def d_name ...` or `abbrev`,
+    a name nothing has used yet, and nothing the root statement mentions, so
+    a definition can add an object but never change what the question says."""
+    if not isinstance(defs, list) or not all(isinstance(d, str) for d in defs):
+        return "defs must be a list of Lean definitions"
+    taken = {d["name"] for d in claim.get("defs", [])}
+    root = set(re.findall(r"[A-Za-z_][A-Za-z_0-9.']*", claim.get("root", "")))
+    for text in defs:
+        m = DEF.match(text.strip())
+        if not m:
+            return "a definition must start `def d_<name>` (or `noncomputable def`, `abbrev`)"
+        if m.group(1) in taken or m.group(1) in root:
+            return f"`{m.group(1)}` is already taken"
+        taken.add(m.group(1))
+        if why := scan(text.strip()[m.end():]):
+            return f"definition {m.group(1)}: {why}"
+    return None
 
 
 def cited(library, texts):
@@ -99,21 +125,24 @@ def proof_file(claim, statement, body, name):
     return f"{header(claim)}{lib}theorem {name} : {statement} := {body}\n"
 
 
-def sketch_file(claim, lemmas, body, name):
+def sketch_file(claim, lemmas, body, name, defs=()):
     """The reduction `lemmas -> statement`, a check that each lemma is a closed
     Prop, and a check that no lemma gives the statement by simp alone (a
     sketch has to make progress). Returns the text and, per lemma, the line of
     its progress check."""
-    lib = cited(claim.get("library", []), [*lemmas, body])
-    text = header(claim) + lib
+    lib = cited(claim.get("library", []), [*lemmas, body or ""])
+    text = header(claim) + "".join(d + "\n\n" for d in defs) + lib
     for lemma in lemmas:
         text += f"example : Prop := ({lemma})\n"
     lines = []
     for lemma in lemmas:
         lines.append(text.count("\n") + 2)
         text += f"\nexample : True := by\n  fail_if_success\n    have _ : ({lemma}) → ({claim['statement']}) := fun h => by simpa using h\n  trivial\n"
-    binders = " ".join(f"(h{i + 1} : {lemma})" for i, lemma in enumerate(lemmas))
-    text += f"\ntheorem {name} {binders} : {claim['statement']} := {body}\n"
+    if body:
+        binders = " ".join(f"(h{i + 1} : {lemma})" for i, lemma in enumerate(lemmas))
+        text += f"\ntheorem {name} {binders} : {claim['statement']} := {body}\n"
+    else:
+        text += f"\ntheorem {name} : True := trivial\n"
     return text, lines
 
 
@@ -221,19 +250,21 @@ def check_sketch(claim, sketch):
     top = claim.get("max_lemmas", 4)
     if len(lemmas) > top:
         return f"at most {top} lemmas"
-    body = str(sketch.get("body", "")).strip()
-    if not body:
-        return "empty body"
+    body = str(sketch.get("body") or "").strip()
+    defs = sketch.get("defs", [])
+    if why := check_defs(claim, defs):
+        return why
+    defs = [d.strip() for d in defs]
     own = normal(claim["statement"])
     if any(normal(x) == own for x in lemmas):
         return "a lemma restates the claim"
     for lemma in lemmas:
         if why := scan(lemma, statement=True):
             return f"lemma `{normal(lemma)[:80]}`: {why}"
-    if why := scan(body):
+    if body and (why := scan(body)):
         return why
     name = f"levin_{secrets.token_hex(6)}"
-    text, lines = sketch_file(claim, lemmas, body, name)
+    text, lines = sketch_file(claim, lemmas, body, name, defs)
 
     def judge(msgs):
         stuck = [m for m in msgs if "expected to fail" in m.get("data", "")]
@@ -244,8 +275,30 @@ def check_sketch(claim, sketch):
                 return f"lemma {i + 1} gives the claim by simp alone, so the sketch makes no progress"
         return problems(msgs)
 
-    expected = " → ".join(f"({x})" for x in [*lemmas, claim["statement"]])
+    expected = " → ".join(f"({x})" for x in [*lemmas, claim["statement"]]) if body else "True"
     return gate(claim, text, name, expected, judge=judge)
+
+
+def check_glue(claim, body):
+    """The missing proof of an informal sketch, from its own lemmas."""
+    if not body.strip():
+        return "empty glue"
+    return check_sketch(claim, {"lemmas": claim["lemmas"], "body": body})
+
+
+def score(claim, where):
+    """Run the problem's own scorer on a search candidate. (score, why)."""
+    spec = claim["score"]
+    try:
+        out = subprocess.run([*spec["cmd"], os.path.join(where, spec.get("file", "candidate.py"))], cwd=where,
+                             capture_output=True, text=True, timeout=spec.get("timeout", 600))
+    except subprocess.TimeoutExpired:
+        return None, "the scorer timed out"
+    lines = out.stdout.strip().splitlines()
+    try:
+        return float(lines[-1]), None
+    except (IndexError, ValueError):
+        return None, "the scorer printed no number: " + (out.stderr or out.stdout)[-1500:]
 
 
 def check_prop(claim, answer):
@@ -265,7 +318,7 @@ def check_cert(claim, text):
 
 
 KINDS = {"prove": ("proof.lean", check_prove), "sketch": ("sketch.json", check_sketch),
-         "prop": ("answer.json", check_prop), "cert": ("cert.lean", check_cert)}
+         "glue": ("glue.lean", check_glue), "prop": ("answer.json", check_prop), "cert": ("cert.lean", check_cert)}
 
 
 def check(claim, artifact):
@@ -278,6 +331,10 @@ def main(argv):
     where = os.path.dirname(path)
     with open(path) as f:
         claim = json.load(f)
+    if claim["kind"] == "score":
+        value, why = score(claim, where)
+        print(f"score {value}" if why is None else why)
+        return 0 if why is None else 1
     name = KINDS[claim["kind"]][0]
     if claim["kind"] == "prove" and not os.path.exists(os.path.join(where, name)) and claim.get("negation"):
         name = "negation.lean"

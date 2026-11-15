@@ -141,7 +141,7 @@ class TreeTest(unittest.TestCase):
         t.sketched(t.roots[1], sketch("D"))
         order = t.order()
         S = t.values(order)
-        g = t.grads(order, S)
+        g, _ = t.grads(order, S)
         for k in (key("A"), key("B"), key("C"), key("D")):
             c, eps = t.claims[k], 1e-6
             c["t"] += eps
@@ -149,8 +149,51 @@ class TreeTest(unittest.TestCase):
             c["t"] -= 2 * eps
             down = total(t)
             c["t"] += eps
-            routes = prod(1 - prod(S[x] for x in t.sketches[s]["lemmas"]) for s in c["sketches"])
+            routes = prod(1 - t.sketch_value(s, S) for s in c["sketches"])
             self.assertAlmostEqual((up - down) / (2 * eps), g[k] * t.reach(c) * routes, places=6)
+
+    def test_informal_sketch_waits_for_its_glue(self):
+        t = Tree({"statement": "P", "truth": 1.0})
+        t.sketched(t.roots[0], {"lemmas": ["A"], "informal": "A gives P"})
+        s = t.claims[t.roots[0]]["sketches"][0]
+        t.proved(key("A"), "a")
+        self.assertIsNone(t.solved())
+        self.assertEqual(t.actions()[0][1:], ("formalize", s))
+        before = t.chance()
+        t.fail("formalize", s)
+        self.assertLess(t.chance(), before)
+        t.formalized(s, "h1")
+        self.assertEqual(t.solved(), t.roots[0])
+        self.assertIn(f"theorem R_{s} (h1 : A) : P := h1", t.certificate())
+
+    def test_definitions_reach_the_certificate(self):
+        t = Tree({"statement": "P", "truth": 1.0})
+        t.sketched(t.roots[0], {"lemmas": ["d_good 3"], "defs": ["def d_good (n : Nat) : Prop := n > 2"], "body": "h1"})
+        t.proved(key("d_good 3"), "by decide")
+        self.assertIn("def d_good (n : Nat) : Prop := n > 2\n\ntheorem L_", t.certificate())
+
+    def test_search_keeps_the_best_and_stops_at_the_target(self):
+        t = Tree({"statement": "P", "score": {"cmd": ["python3"], "target": 10}})
+        side = t.roots[1]
+        self.assertIn(("search", side), [a[1:] for a in t.actions()])
+        t.searched(side, "x = 3", 3.0)
+        t.searched(side, "x = 2", 2.0)
+        self.assertEqual([b["score"] for b in t.claims[side]["best"]], [3.0, 2.0])
+        self.assertEqual(t.claims[side]["search_fails"], 1)
+        t.searched(side, "x = 10", 10.0)
+        self.assertIn("x = 10", t.claims[side]["notes"])
+        self.assertNotIn("search", [a[1] for a in t.actions()])
+
+    def test_round_robin_ignores_the_scores(self):
+        t = Tree({"statement": "P", "planner": "round_robin"})
+        first = t.actions()[0]
+        t.picked(first[1], first[2])
+        self.assertNotEqual(t.actions()[0][1:], first[1:])
+
+    def test_falsify_first_can_be_turned_off(self):
+        t = Tree({"statement": "P", "truth": 1.0, "falsify_first": False})
+        t.sketched(t.roots[0], sketch("A"))
+        self.assertNotIn("falsify", [a[1] for a in t.actions()])
 
     def test_guesses_become_roots(self):
         t = Tree({"statement": "f 3 = ANSWER", "max_guesses": 2})

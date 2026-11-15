@@ -15,18 +15,33 @@ of the subscription and charges each task against its own budget.
 How it searches
 
 A claim is a closed Lean proposition. A sketch is a way to prove a claim from
-lemmas: Lean must accept `theorem (h1 : L1) ... (hk : Lk) : claim := body`
-before the sketch exists. Its lemmas are claims too, keyed by their text, so a
-lemma two sketches need is one node and gets proved once. The root is P and
+lemmas, which are claims too, keyed by their text, so a lemma two sketches
+need is one node and gets proved once. A sketch may define new objects
+(`def d_...`) that its lemmas talk about. Its glue, the Lean proof
+`theorem (h1 : L1) ... (hk : Lk) : claim := body`, may come with it or later:
+open problems get solved informally first, so a sketch whose lemmas Lean
+accepts as propositions enters the tree informal, its lemmas get worked on,
+and a formalize task writes the glue. Until then it counts at a discount
+that drops each time the glue fails, so a plan that does not hold together
+loses its compute. The root is P and
 not-P together, since an open problem may be false, or P with ANSWER filled in
 by each guessed value when the question asks for one.
 
-Four kinds of task:
+Six kinds of task:
 
     prove      write a proof of the claim
     falsify    look for a counterexample, with python, and prove the negation
     decompose  write an informal proof, then a sketch
+    formalize  write the glue of an informal sketch
+    search     improve a construction against the problem's own scorer
     guess      propose a value for ANSWER
+
+search is for problems where the answer is an object: a problem file with a
+"score" (a command that rates a candidate file and prints a number, and a
+target) gets search tasks on the side a construction would settle. The best
+four candidates and their scores are kept on the claim and handed to the next
+search task to improve, in the manner of AlphaEvolve; one that reaches the
+target goes into the claim's notes for the proof that uses it.
 
 Every new lemma gets a falsify task before anything else is spent on it, and
 those go first. Decompositions written by models are full of plausible lemmas
@@ -72,13 +87,17 @@ next attempt on that claim reads, and false branches are cut early.
 
 What it trusts
 
-A worker controls a proof body, a sketch, or an answer, never the statement.
+A worker controls a proof body, a sketch, glue, an answer or a candidate,
+never the statement.
 levin writes the file around it. Before Lean runs, text is refused if it has
 a string or name literal or a `#`, declares anything, adds syntax or axioms,
 runs meta code, or sets an option other than heartbeats; lemma statements may
 not contain `by`. `autoImplicit` is off. Each lemma must elaborate as a Prop,
 and a sketch is refused if any one lemma gives the claim by `simpa` alone, so
-splitting cannot regress for free. A guessed answer must be an integer, or a
+splitting cannot regress for free; that includes a lemma that is the claim
+unfolded through a new definition. A definition must be named `d_...`, a
+name nothing has used and the root statement does not mention, so it can add
+an object but never change what the question says. A guessed answer must be an integer, or a
 fraction when the problem file sets "answer_type" to ℚ or ℝ: anything richer
 can restate the question (`sInf {n | P n}`) or splice into it. So questions
 whose answer is √2 or π/4 are out of reach of `guess`; state those as yes/no.
@@ -153,9 +172,13 @@ proxy. Then a problem file:
       "lean_dir": "/path/to/mathlib-project",
       "hints": "Mathlib source is at /path/to/mathlib-project/.lake/packages/mathlib.",
       "budget": 20000000,
-      "tokens": {"prove": 400000, "falsify": 200000, "decompose": 400000},
       "inlet": {"home": "~/.inlet", "slots": 2, "memory_mb": 8192}
     }
+
+Add "score": {"cmd": ["python3", "score.py"], "target": 1, "proves":
+"negation"} for a problem a construction can settle. Per-task token budgets
+default to agent size (400k for prove, decompose, formalize and search) and
+go under "tokens".
 
 and
 
@@ -182,6 +205,22 @@ in a row pause the run for 15 minutes.
 Budgets are in whatever the proxy meters. Through claude-upstream.py every
 call carries the CLI's own system prompt, about 28k tokens of it cached, so
 size budgets for that.
+
+
+Measuring it
+
+Whether weighing hypotheses beats more tries is a question for an
+experiment, not this README. The arms, all on one budget, on problems where a
+single attempt almost never lands:
+
+    best-of-N        "max_sketches": 0, "falsify_first": false, slots N
+    one long agent   "max_sketches": 0, "slots": 1, one huge "prove" budget
+    levin            defaults
+    no beliefs       "planner": "round_robin" (same task kinds, no gradient)
+    no falsify       "falsify_first": false
+
+Report solve rate against tokens. The round-robin arm is the one that says
+whether the beliefs earn anything over lemma reuse and notes alone.
 
 
 Where to point it

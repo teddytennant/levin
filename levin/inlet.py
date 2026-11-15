@@ -70,3 +70,9 @@ class Inlet:
                 return f.read()
         except OSError:
             return None
+
+    def verifier_output(self, id):
+        try:
+            return self.cli("logs", id, "--verify")
+        except RuntimeError:
+            return ""

@@ -1,6 +1,9 @@
+import json
 import os
 import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 
 from levin import check
@@ -91,6 +94,28 @@ class GateTest(unittest.TestCase):
         preamble = "namespace Foo\nlocal notation \"two\" => (2 : Nat)\nvariable (k : Nat)"
         self.assertIsNone(check.check(claim("prove", "two + two = 4", preamble=preamble), "rfl"))
 
+    def test_sketch_with_a_definition(self):
+        c = claim("sketch", "∀ n : Nat, 2 ∣ n * (n + 1)", root="∀ n : Nat, 2 ∣ n * (n + 1)")
+        s = {"defs": ["def d_one_even (n : Nat) : Prop := 2 ∣ n ∨ 2 ∣ n + 1"],
+             "lemmas": ["∀ n : Nat, d_one_even n", "∀ n : Nat, d_one_even n → 2 ∣ n * (n + 1)"],
+             "body": "fun n => h2 n (h1 n)"}
+        self.assertIsNone(check.check(c, s))
+
+    def test_definitions_cannot_take_names(self):
+        c = claim("sketch", "1 = 1", root="d_x = 1", defs=[{"name": "d_y", "text": "def d_y : Nat := 1"}])
+        for d, why in (("def sq (n : Nat) : Nat := n * n", "must start"), ("def d_y : Nat := 2", "already taken"),
+                       ("def d_x : Nat := 1", "already taken"), ("def d_z : Nat := by exact (sorry)", None)):
+            got = check.check(c, {"defs": [d], "lemmas": ["2 = 2"]})
+            self.assertIn(why or "sorry", got)
+
+    def test_informal_sketch_and_its_glue(self):
+        c = claim("sketch", "∀ a b : Nat, a + b = b + a ∧ a * b = b * a")
+        lemmas = ["∀ a b : Nat, a + b = b + a", "∀ a b : Nat, a * b = b * a"]
+        self.assertIsNone(check.check(c, {"lemmas": lemmas}))
+        g = claim("glue", c["statement"], lemmas=lemmas)
+        self.assertIsNone(check.check(g, "fun a b => ⟨h1 a b, h2 a b⟩"))
+        self.assertIsNotNone(check.check(g, "fun a b => ⟨h2 a b, h1 a b⟩"))
+
     def test_answer_cannot_splice(self):
         why = check.check(claim("prop", "ANSWER * 0 = 1"), {"answer": "0) * 0 = 1 ∨ True ∨ ((0 : Nat)"})
         self.assertIn("must be an integer", why)
@@ -99,6 +124,17 @@ class GateTest(unittest.TestCase):
         cert = ("set_option autoImplicit false\n\ntheorem L_000000000001 : 2 + 2 = 4 := rfl\n\n"
                 "theorem levin_root : 2 + 2 = 4 := L_000000000001\n")
         self.assertIsNone(check.check(claim("cert", "2 + 2 = 4"), cert))
+
+
+class ScoreTest(unittest.TestCase):
+    def test_scorer_number_is_printed(self):
+        where = tempfile.mkdtemp()
+        with open(os.path.join(where, "claim.json"), "w") as f:
+            json.dump({"kind": "score", "score": {"cmd": [sys.executable, "-c", "import sys; print(len(open(sys.argv[1]).read()))"]}}, f)
+        with open(os.path.join(where, "candidate.py"), "w") as f:
+            f.write("abcde")
+        out = subprocess.run([sys.executable, check.__file__, os.path.join(where, "claim.json")], capture_output=True, text=True)
+        self.assertEqual((out.returncode, out.stdout), (0, "score 5.0\n"))
 
 
 if __name__ == "__main__":

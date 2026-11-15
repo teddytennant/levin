@@ -35,6 +35,10 @@ class FakeInlet:
             out[id] = {"ok": ok, "reason": reason, "used": 100, "last": id}
         return out
 
+    def verifier_output(self, id):
+        worker, claim, files = self.tasks[id]
+        return f"score {len(files.get('candidate.py', ''))}\n" if claim["kind"] == "score" else "accepted\n"
+
     def kill(self, id):
         self.killed.append(id)
 
@@ -131,6 +135,35 @@ class RunTest(unittest.TestCase):
         run = self.run_with(FakeInlet(worker, judge))
         self.assertEqual(run.tree.solved(), key("P"))
         self.assertEqual(run.tree.claims[key("P")]["sketch_fails"], 0)
+
+    def test_informal_plan_is_formalized_later(self):
+        def planner(claim):
+            if claim["kind"] == "sketch" and claim["statement"] == "P":
+                return True, "ok", {"sketch.json": json.dumps({"lemmas": ["A"], "informal": "A gives P"})}
+            if claim["kind"] == "prove" and claim["statement"] == "A":
+                return True, "ok", {"proof.lean": "a"}
+            if claim["kind"] == "glue":
+                return True, "ok", {"glue.lean": "h1"}
+            return False, "verifier", {}
+
+        inlet = FakeInlet(planner)
+        run = self.run_with(inlet)
+        self.assertEqual(run.tree.solved(), key("P"))
+        glue = [c for w, c, _ in inlet.tasks.values() if c["kind"] == "glue"]
+        self.assertEqual(glue[0]["lemmas"], ["A"])
+
+    def test_search_scores_come_back_from_the_judge(self):
+        def searcher(claim):
+            if claim["kind"] == "score":
+                return True, "ok", {"candidate.py": "x" * 7}
+            return False, "verifier", {}
+
+        self.problem(truth=0.5, root_rate=0.001, score={"cmd": ["python3"], "target": 7},
+                     inlet={"slots": 1}, max_sketches=0)
+        run = self.run_with(FakeInlet(searcher), steps=6)
+        side = run.tree.roots[1]
+        self.assertEqual(run.tree.claims[side]["best"][0]["score"], 7.0)
+        self.assertIn("xxxxxxx", run.tree.claims[side]["notes"])
 
     def test_failures_without_a_verdict_are_not_evidence(self):
         run = self.run_with(FakeInlet(lambda claim: (False, "exit", {})), steps=5)

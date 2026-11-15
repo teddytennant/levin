@@ -14,9 +14,11 @@ from .inlet import Inlet
 from .tree import Tree, negate
 
 CHECK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check.py")
-ARTIFACT = {"prove": "proof.lean", "falsify": "proof.lean", "decompose": "sketch.json", "guess": "answer.json", "cert": "cert.lean"}
+ARTIFACT = {"prove": "proof.lean", "falsify": "proof.lean", "decompose": "sketch.json", "formalize": "glue.lean",
+            "guess": "answer.json", "cert": "cert.lean"}
 MERITS = {"verifier", "purse", "timeout", "stall"}
-GATE = {"prove": "prove", "falsify": "prove", "decompose": "sketch", "guess": "prop", "cert": "cert"}
+GATE = {"prove": "prove", "falsify": "prove", "decompose": "sketch", "formalize": "glue", "search": "score",
+        "guess": "prop", "cert": "cert"}
 
 
 class Run:
@@ -47,9 +49,16 @@ class Run:
             os.fsync(f.fileno())
         self.apply(e)
 
+    def artifact(self, kind):
+        if kind == "search":
+            return self.problem["score"].get("file", "candidate.py")
+        return ARTIFACT[kind]
+
     def apply(self, e):
         if e["ev"] == "submit":
             self.inflight[e["id"]] = e
+            if e["phase"] == "work":
+                self.tree.picked(e["kind"], e["claim"])
             return
         self.inflight.pop(e["id"], None)
         self.spent += e.get("used", 0)
@@ -67,6 +76,10 @@ class Run:
                 self.tree.refuted(k, a.strip())
             elif kind == "decompose":
                 self.tree.sketched(k, json.loads(a))
+            elif kind == "formalize":
+                self.tree.formalized(k, a.strip())
+            elif kind == "search":
+                self.tree.searched(k, a, e["score"])
             elif kind == "guess":
                 a = json.loads(a)
                 self.tree.guessed(str(a["answer"]).strip(), a.get("credence"))
@@ -88,6 +101,8 @@ class Run:
             statement = t.claims[t.solved()]["statement"]
         elif kind == "falsify":
             statement = negate(t.claims[k]["statement"])
+        elif kind == "formalize":
+            statement = t.claims[t.sketches[k]["claim"]]["statement"]
         else:
             statement = t.claims[k]["statement"]
         return json.dumps({
@@ -98,25 +113,31 @@ class Run:
             "negation": negate(statement) if kind == "prove" else None,
             "fresh": p.get("fresh", False),
             "answer_type": p.get("answer_type"),
+            "root": p["statement"], "defs": t.defs,
+            "lemmas": t.sketches[k]["texts"] if kind == "formalize" else None,
+            "score": p.get("score") if kind == "search" else None,
         }, indent=1)
 
     def verify(self):
         return f"python3 {self.cfg.get('check', CHECK)} claim.json"
 
     def start(self, kind, k, score=0.0):
-        notes = self.tree.claims[k]["notes"] if k else ""
+        notes = self.tree.claims[k]["notes"] if k in self.tree.claims else ""
         goal = prompts.goal(self.tree, kind, k, self.cfg.get("check", CHECK))
         tokens = self.tree.cfg["tokens"][kind]
         worker = self.cfg.get("workers", {}).get(kind, self.cfg.get("worker", "prover"))
-        id = self.inlet.submit(worker, goal, self.verify(), {"claim.json": self.claim_json(kind, k), "notes.md": notes},
+        files = {"claim.json": self.claim_json(kind, k), "notes.md": notes}
+        if kind == "search":
+            files["best.json"] = json.dumps(self.tree.claims[k]["best"], indent=1)
+        id = self.inlet.submit(worker, goal, self.verify(), files,
                                tokens, self.cfg.get("retries", 1), self.cfg.get("memory_mb", 8192))
         self.record({"ev": "submit", "id": id, "kind": kind, "claim": k, "phase": "work", "tokens": tokens, "seeded": notes})
-        self.say(f"{kind:9}", f"L_{k}" if k else "", f"{score:.3g}", id)
+        self.say(f"{kind:9}", label(k), f"{score:.3g}", id)
 
     def judge(self, kind, k, artifact, work=None, tries=1):
         """Re-check an artifact in a fresh cell, against levin's own copy of the
         statement. The worker could have edited claim.json in its own workdir."""
-        files = {"claim.json": self.claim_json(kind, k), ARTIFACT[kind]: artifact}
+        files = {"claim.json": self.claim_json(kind, k), self.artifact(kind): artifact}
         id = self.inlet.submit(self.cfg.get("checker", "levin_check"), f"levin judges {kind}", self.verify(), files,
                                1000, 0, self.cfg.get("memory_mb", 8192))
         self.record({"ev": "submit", "id": id, "kind": kind, "claim": k, "phase": "check", "artifact": artifact,
@@ -129,25 +150,30 @@ class Run:
             if e["phase"] == "check":
                 if not r["ok"] and r["reason"] != "verifier":
                     self.record({"ev": "settle", "id": id, "kind": kind, "claim": k, "used": r["used"]})
-                    self.say("the judge itself failed", r["reason"], kind, f"L_{k}" if k else "")
+                    self.say("the judge itself failed", r["reason"], kind, label(k))
                     if e.get("tries", 1) < 3:
                         self.judge(kind, k, e["artifact"], e.get("work"), e.get("tries", 1) + 1)
                     else:
                         self.say("gave up judging it; the artifact is in the event log, from task", e.get("work"))
                     continue
-                if kind == "cert":
+                if kind == "search":
+                    out = self.inlet.verifier_output(r["last"]).strip().splitlines()
+                    if r["ok"] and out and out[-1].startswith("score "):
+                        e = dict(e, score=float(out[-1].split()[1]))
+                    outcome = "accepted" if "score" in e else "rejected"
+                elif kind == "cert":
                     outcome = "accepted" if r["ok"] else "cert-failed"
                 else:
                     outcome = "accepted" if r["ok"] else "rejected"
                     if not r["ok"]:
                         self.say("the in-cell gate passed but the judge did not", e.get("work"))
                 self.record({"ev": "settle", "id": id, "kind": kind, "claim": k, "outcome": outcome,
-                             "artifact": e["artifact"], "used": r["used"]})
-                self.say(f"{outcome:9}", kind, f"L_{k}" if k else "")
+                             "artifact": e["artifact"], "used": r["used"], "score": e.get("score")})
+                self.say(f"{outcome:9}", kind, label(k))
                 continue
             notes, seeded = self.inlet.read(r["last"], "notes.md") or "", e.get("seeded", "")
             added = notes[len(seeded):] if notes.startswith(seeded) else notes
-            artifact = self.inlet.read(r["last"], ARTIFACT[kind]) if r["ok"] else None
+            artifact = self.inlet.read(r["last"], self.artifact(kind)) if r["ok"] else None
             if r["ok"] and artifact is None and kind == "prove":
                 artifact = self.inlet.read(r["last"], "negation.lean")
                 kind = "falsify" if artifact is not None else kind
@@ -158,7 +184,7 @@ class Run:
             if artifact is not None:
                 self.judge(kind, k, artifact, id)
             elif not r["ok"]:
-                self.say(f"{'failed':9}", kind, f"L_{k}" if k else "", r["reason"])
+                self.say(f"{'failed':9}", kind, label(k), r["reason"])
             self.idle_failures = 0 if evidence else self.idle_failures + 1
             if self.idle_failures >= self.cfg.get("pause_after", 3):
                 self.paused_until = time.time() + self.cfg.get("pause_seconds", 900)
@@ -209,6 +235,11 @@ class Run:
             self.say(f"stopped: {self.spent} tokens spent, P(resolved) now {t.chance():.3f}")
 
 
+def label(k):
+    """L_<key> for a claim, the sketch id for a sketch, nothing for a guess."""
+    return "" if k is None else k if "_" in k else f"L_{k}"
+
+
 def show(run, top=12):
     t = run.tree
     print(f"P(resolved) {t.chance():.4f}   spent {run.spent}   in flight {len(run.inflight)}   claims {len(t.claims)}   proved {len(t.library)}")
@@ -216,7 +247,8 @@ def show(run, top=12):
     S = t.values(order)
     print("\nnext steps:")
     for score, kind, k in t.actions()[:top]:
-        print(f"  {score:10.3g}  {kind:9}  {('L_' + k) if k else ''}  {t.claims[k]['statement'][:90] if k else ''}")
+        c = t.claims.get(k) or t.claims.get(t.sketches.get(k, {}).get("claim"), {})
+        print(f"  {score:10.3g}  {kind:9}  {label(k)}  {c.get('statement', '')[:90]}")
     print("\nclaims:")
     for k in reversed(order):
         c = t.claims[k]
