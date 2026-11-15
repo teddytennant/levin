@@ -166,7 +166,7 @@ class RunTest(unittest.TestCase):
         self.assertIn("xxxxxxx", run.tree.claims[side]["notes"])
 
     def test_failures_without_a_verdict_are_not_evidence(self):
-        run = self.run_with(FakeInlet(lambda claim: (False, "exit", {})), steps=5)
+        run = self.run_with(FakeInlet(lambda claim: (False, "crash", {})), steps=5)
         p = run.tree.claims[key("P")]
         self.assertEqual((p["fails"], p["sketch_fails"]), (0, 0))
         self.assertGreater(run.paused_until, 0)

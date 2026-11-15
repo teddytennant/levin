@@ -202,9 +202,10 @@ sketches per claim (only sketches with no refuted lemma count), lemmas per
 sketch. `catch` (the chance a falsify task finds a counterexample to a false
 claim) and `guess_value` are policy, not measurements; nothing learns them.
 `retries` (default 1) and `workers` (a worker per task kind, say a stronger
-model for decompose) go under "inlet". Only a verifier's no, a used-up budget, a timeout or a stall
-counts as evidence. A task that died some other way or used no tokens, which
-is what a rate-limited subscription looks like, changes no belief, and three
+model for decompose) go under "inlet". Only a verifier's no, a used-up budget, a timeout, a stall, or a
+worker that gave up after using tokens counts as evidence. A task that died
+some other way or used no tokens, which is what a rate-limited subscription
+looks like, changes no belief, and three
 in a row pause the run for 15 minutes.
 
 Budgets are in whatever the proxy meters. Through claude-upstream.py every

@@ -16,7 +16,7 @@ from .tree import Tree, negate
 CHECK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check.py")
 ARTIFACT = {"prove": "proof.lean", "falsify": "proof.lean", "decompose": "sketch.json", "formalize": "glue.lean",
             "guess": "answer.json", "cert": "cert.lean"}
-MERITS = {"verifier", "purse", "timeout", "stall"}
+MERITS = {"verifier", "purse", "timeout", "stall", "exit"}
 GATE = {"prove": "prove", "falsify": "prove", "decompose": "sketch", "formalize": "glue", "search": "score",
         "guess": "prop", "cert": "cert"}
 
