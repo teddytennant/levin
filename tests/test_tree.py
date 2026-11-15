@@ -184,14 +184,31 @@ class TreeTest(unittest.TestCase):
         self.assertIn("x = 10", t.claims[side]["notes"])
         self.assertNotIn("search", [a[1] for a in t.actions()])
 
+    def test_hopeless_glue_frees_the_claim(self):
+        t = Tree({"statement": "P", "truth": 1.0, "max_sketches": 1})
+        t.sketched(t.roots[0], {"lemmas": ["A"], "informal": ""})
+        s = t.claims[t.roots[0]]["sketches"][0]
+        self.assertNotIn("decompose", [a[1] for a in t.actions()])
+        for _ in range(3):
+            t.fail("formalize", s)
+        self.assertIn("decompose", [a[1] for a in t.actions()])
+        self.assertNotIn("formalize", [a[1] for a in t.actions()])
+
+    def test_a_definition_name_means_one_thing(self):
+        t = Tree({"statement": "P", "truth": 1.0})
+        t.sketched(t.roots[0], {"lemmas": ["d_f = 1"], "defs": ["def d_f : Nat := 1"], "body": "h1"})
+        self.assertFalse(t.sketched(t.roots[0], {"lemmas": ["d_f = 2"], "defs": ["def d_f : Nat := 2"], "body": "h1"}))
+        self.assertTrue(t.sketched(t.roots[0], {"lemmas": ["d_f = 1 ∧ True"], "defs": ["def d_f : Nat := 1"], "body": "h1.1"}))
+        self.assertEqual(len(t.defs), 1)
+
     def test_round_robin_ignores_the_scores(self):
         t = Tree({"statement": "P", "planner": "round_robin"})
         first = t.actions()[0]
         t.picked(first[1], first[2])
         self.assertNotEqual(t.actions()[0][1:], first[1:])
 
-    def test_falsify_first_can_be_turned_off(self):
-        t = Tree({"statement": "P", "truth": 1.0, "falsify_first": False})
+    def test_falsify_can_be_turned_off(self):
+        t = Tree({"statement": "P", "truth": 1.0, "falsify": False})
         t.sketched(t.roots[0], sketch("A"))
         self.assertNotIn("falsify", [a[1] for a in t.actions()])
 

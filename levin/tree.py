@@ -23,7 +23,7 @@ them, so t(c) is raised to that bound, which also moves belief off the other
 side of the root. S(root) is the sum over resolutions, since at most one can
 be true. The next step is the one with the largest dS(root) per token, found
 with one backward pass over the DAG. New lemmas are searched for
-counterexamples before anything else.
+counterexamples before anything is spent proving them.
 """
 import hashlib
 import re
@@ -49,7 +49,8 @@ DEFAULTS = {
     "max_lemmas": 4,
     "max_guesses": 4,
     "guess_value": 0.05,
-    "falsify_first": True,
+    "falsify": True,
+    "max_glue_fails": 3,
     "planner": "gradient",
     "tokens": {"prove": 400000, "falsify": 200000, "decompose": 400000, "formalize": 400000,
                "search": 400000, "guess": 200000},
@@ -100,7 +101,7 @@ class Tree:
             self.claims[k] = {
                 "key": k, "statement": normal(statement), "status": "open", "t": t, "rate": rate or self.cfg["prove_rate"],
                 "fails": 0, "sketch_fails": 0, "search_fails": 0, "best": [],
-                "falsified": falsified or not self.cfg["falsify_first"], "depth": depth,
+                "falsified": falsified or not self.cfg["falsify"], "depth": depth,
                 "sketches": [], "proof": None, "notes": "",
             }
         c = self.claims[k]
@@ -154,7 +155,11 @@ class Tree:
         return best
 
     def live(self, c):
-        return [s for s in c["sketches"] if all(self.claims[x]["status"] != "refuted" for x in self.sketches[s]["lemmas"])]
+        """Sketches that can still close: no refuted lemma, and glue that is
+        written or has not failed `max_glue_fails` times."""
+        return [s for s in c["sketches"]
+                if all(self.claims[x]["status"] != "refuted" for x in self.sketches[s]["lemmas"])
+                and (self.sketches[s]["body"] or self.sketches[s]["glue_fails"] < self.cfg["max_glue_fails"])]
 
     def fresh_sketch(self):
         """What a sketch not yet seen is worth: two fresh lemmas and glue."""
@@ -193,7 +198,7 @@ class Tree:
                 S[k] = 1.0 if c["status"] == "proved" else 0.0
                 continue
             miss = 1 - c["t"] * self.reach(c)
-            for s in c["sketches"]:
+            for s in self.live(c):
                 miss *= 1 - self.sketch_value(s, S)
             S[k] = 1 - miss
         return S
@@ -208,8 +213,9 @@ class Tree:
             c = self.claims[k]
             if c["status"] != "open" or not g[k]:
                 continue
-            hs = [self.sketch_value(s, S) for s in c["sketches"]]
-            for i, s in enumerate(c["sketches"]):
+            live = self.live(c)
+            hs = [self.sketch_value(s, S) for s in live]
+            for i, s in enumerate(live):
                 gs[s] = g[k] * (1 - c["t"] * self.reach(c)) * prod(1 - h for j, h in enumerate(hs) if j != i)
                 ls = self.sketches[s]["lemmas"]
                 for j, x in enumerate(ls):
@@ -245,9 +251,9 @@ class Tree:
             c = self.claims[k]
             if c["status"] != "open" or g[k] <= 0:
                 continue
-            for s in c["sketches"]:
+            for s in self.live(c):
                 sk = self.sketches[s]
-                if not sk["body"] and s not in busy and s in self.live(c):
+                if not sk["body"] and s not in busy:
                     land = self.mean(self.cfg["glue_rate"], sk["glue_fails"])
                     gain = gs[s] * (1 - self.glue(s)) * prod(S[x] for x in sk["lemmas"])
                     out.append((gain * land / cost["formalize"], "formalize", s))
@@ -255,7 +261,7 @@ class Tree:
                 continue
             gain = g[k] * (1 - S[k])
             if not c["falsified"]:
-                out.append((gain / cost["falsify"], "falsify", k))
+                out.append((gain * c["t"] * self.p(c) / cost["falsify"], "falsify", k))
                 continue
             out.append((gain * c["t"] * self.p(c) / cost["prove"], "prove", k))
             if c["depth"] < self.cfg["max_depth"] and len(self.live(c)) < self.cfg["max_sketches"]:
@@ -270,7 +276,7 @@ class Tree:
             out.append((left * self.cfg["guess_value"] / cost["guess"], "guess", None))
         if self.cfg["planner"] == "round_robin":
             out = [(1 / (1 + self.picks.get(f"{kind} {target}", 0)), kind, target) for _, kind, target in out]
-        return sorted(out, key=lambda a: (a[1] != "falsify", -a[0]))
+        return sorted(out, key=lambda a: -a[0])
 
     def picked(self, kind, target):
         name = f"{kind} {target}"
@@ -381,11 +387,12 @@ class Tree:
         if set(keys) & self.ancestors(k):
             c["sketch_fails"] += 1
             return False
-        known = {d["name"] for d in self.defs}
-        for text in sketch.get("defs", []):
-            name = DEF.match(text.strip()).group(1)
-            if name not in known:
-                self.defs.append({"name": name, "text": text.strip()})
+        known = {d["name"]: d["text"] for d in self.defs}
+        new = {DEF.match(text.strip()).group(1): text.strip() for text in sketch.get("defs", [])}
+        if any(known.get(name, text) != text for name, text in new.items()):
+            c["sketch_fails"] += 1
+            return False
+        self.defs += [{"name": name, "text": text} for name, text in new.items() if name not in known]
         for t, credence in zip(texts, credences):
             prior = self.cfg["lemma_truth"] if not isinstance(credence, (int, float)) else clamp(credence, 0.1, 0.9)
             self.add(t, prior, c["depth"] + 1)

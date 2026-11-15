@@ -41,10 +41,11 @@ search is for problems where the answer is an object: a problem file with a
 target) gets search tasks on the side a construction would settle. The best
 four candidates and their scores are kept on the claim and handed to the next
 search task to improve, in the manner of AlphaEvolve; one that reaches the
-target goes into the claim's notes for the proof that uses it.
+target goes into the claim's notes for the proof that uses it. Search runs on
+a root side only, not on lemmas.
 
-Every new lemma gets a falsify task before anything else is spent on it, and
-those go first. Decompositions written by models are full of plausible lemmas
+Every new lemma gets a falsify task before any prove or decompose is spent on
+it; when that runs is up to its score, like everything else. Decompositions written by models are full of plausible lemmas
 that are false, and a false lemma takes down everything built on it. A prove
 task that finds its claim false can hand in a proof of the negation instead,
 and when a lemma is refuted its counterexample goes into the notes of every
@@ -213,11 +214,11 @@ Whether weighing hypotheses beats more tries is a question for an
 experiment, not this README. The arms, all on one budget, on problems where a
 single attempt almost never lands:
 
-    best-of-N        "max_sketches": 0, "falsify_first": false, slots N
+    best-of-N        "max_sketches": 0, "falsify": false
     one long agent   "max_sketches": 0, "slots": 1, one huge "prove" budget
     levin            defaults
     no beliefs       "planner": "round_robin" (same task kinds, no gradient)
-    no falsify       "falsify_first": false
+    no falsify       "falsify": false (no counterexample searches at all)
 
 Report solve rate against tokens. The round-robin arm is the one that says
 whether the beliefs earn anything over lemma reuse and notes alone.
