@@ -87,6 +87,10 @@ class GateTest(unittest.TestCase):
         why = check.gate(c, check.proof_file(c, "True", "trivial", "levin_t"), "levin_t", "1 = 2")
         self.assertIn("mismatch", why)
 
+    def test_preamble_namespace_and_notation(self):
+        preamble = "namespace Foo\nlocal notation \"two\" => (2 : Nat)\nvariable (k : Nat)"
+        self.assertIsNone(check.check(claim("prove", "two + two = 4", preamble=preamble), "rfl"))
+
     def test_answer_cannot_splice(self):
         why = check.check(claim("prop", "ANSWER * 0 = 1"), {"answer": "0) * 0 = 1 ∨ True ∨ ((0 : Nat)"})
         self.assertIn("must be an integer", why)

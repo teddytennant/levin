@@ -88,7 +88,9 @@ the kernel by leanchecker. A second Lean process imports it, re-elaborates
 levin's own statement in a clean scope, checks the proved constant against
 it, and reads its axioms; nothing past propext, Classical.choice and
 Quot.sound passes. Whatever the worker's text did to its own scope stays in
-its module. The keyword filter is the cheap first layer and is known to be
+its module. That second file gets the preamble's one-line scope commands
+(open, namespace, section, variable, notation, set_option) but not its
+imports or declarations, so keep a preamble to imports and such lines. The keyword filter is the cheap first layer and is known to be
 bypassable: in review, a `run_tac` hidden behind a `"--"` string added an
 unchecked `1 = 2` with `debug.skipKernelTC`. Strings are refused now, and the
 replay catches that declaration by itself either way (tests/test_check.py).

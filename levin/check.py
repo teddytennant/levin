@@ -159,9 +159,14 @@ def problems(msgs):
     return None
 
 
+SCOPE = ("open ", "set_option ", "namespace ", "section", "noncomputable section", "end", "variable ", "universe ",
+         "notation", "local notation", "scoped notation", "infix", "local infix", "attribute [local")
+
+
 def scope(claim):
-    """The preamble's opens and options, without its imports."""
-    return "".join(line + "\n" for line in claim["preamble"].splitlines() if line.startswith(("open ", "set_option ")))
+    """The preamble's one-line scope commands, without its imports or
+    declarations, so names and notation mean what they meant in the module."""
+    return "".join(line + "\n" for line in claim["preamble"].splitlines() if line.startswith(SCOPE))
 
 
 def audit(claim, where, name, expected, fresh=False):
@@ -179,7 +184,7 @@ def audit(claim, where, name, expected, fresh=False):
     msgs = messages(run([*claim["lean"], "--json", path], claim, where, claim.get("timeout", 600)))
     if why := problems(msgs):
         return why
-    said = [m["data"] for m in msgs if m.get("data", "").startswith(f"'{name}' ")]
+    said = [m["data"] for m in msgs if re.match(rf"'([\w.]+\.)?{name}' ", m.get("data", ""))]
     if len(said) != 1:
         return "no axiom report for the theorem"
     if "does not depend on any axioms" in said[0]:
