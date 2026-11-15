@@ -201,6 +201,12 @@ class TreeTest(unittest.TestCase):
         self.assertTrue(t.sketched(t.roots[0], {"lemmas": ["d_f = 1 ∧ True"], "defs": ["def d_f : Nat := 1"], "body": "h1.1"}))
         self.assertEqual(len(t.defs), 1)
 
+    def test_a_goal_without_a_statement_only_searches(self):
+        t = Tree({"goal": "fewer Toffolis", "score": {"cmd": ["python3"], "target": 5}})
+        self.assertEqual([a[1] for a in t.actions()], ["search"])
+        t.searched(t.roots[0], "c", 5.0)
+        self.assertEqual(t.actions(), [])
+
     def test_round_robin_ignores_the_scores(self):
         t = Tree({"statement": "P", "planner": "round_robin"})
         first = t.actions()[0]

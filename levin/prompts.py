@@ -156,7 +156,7 @@ def goal(tree, kind, k, check):
     sketch = tree.sketches.get(k) if kind == "formalize" else None
     c = tree.claims[sketch["claim"] if sketch else k] if k else None
     shared = SHARED.format(
-        root=p["statement"], preamble=p.get("preamble", "").replace("\n", "\n    "),
+        root=p.get("statement", p.get("goal")), preamble=p.get("preamble", "").replace("\n", "\n    "),
         why=why(tree, c["key"]) if c else "", library=definitions(tree) + library(tree), hints=p.get("hints", ""),
     )
     if kind == "guess":

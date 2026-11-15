@@ -41,7 +41,9 @@ search is for problems where the answer is an object: a problem file with a
 target) gets search tasks on the side a construction would settle. The best
 four candidates and their scores are kept on the claim and handed to the next
 search task to improve, in the manner of AlphaEvolve; one that reaches the
-target goes into the claim's notes for the proof that uses it. Search runs on
+target goes into the claim's notes for the proof that uses it. A problem file
+with a "goal" instead of a "statement" is search only: no Lean, just the
+scorer, which is how levin runs on an optimization contest. Search runs on
 a root side only, not on lemmas.
 
 Every new lemma gets a falsify task before any prove or decompose is spent on
@@ -187,7 +189,9 @@ and
     python3 -m levin run run/
     python3 -m levin show run/
 
-`run` can be killed and started again at any time. Everything is in
+`python3 -m levin curve run/` prints tokens spent against the best score so
+far, which is the number to compare between arms. `run` can be killed and
+started again at any time. Everything is in
 run/events.jsonl and the tree is rebuilt from it; tasks still on inlet are
 collected when they finish. `show` prints the chance of a resolution, the next
 steps with their scores, and every claim.

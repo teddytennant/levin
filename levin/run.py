@@ -113,7 +113,7 @@ class Run:
             "negation": negate(statement) if kind == "prove" else None,
             "fresh": p.get("fresh", False),
             "answer_type": p.get("answer_type"),
-            "root": p["statement"], "defs": t.defs,
+            "root": p.get("statement", ""), "defs": t.defs,
             "lemmas": t.sketches[k]["texts"] if kind == "formalize" else None,
             "score": p.get("score") if kind == "search" else None,
         }, indent=1)
@@ -128,7 +128,8 @@ class Run:
         worker = self.cfg.get("workers", {}).get(kind, self.cfg.get("worker", "prover"))
         files = {"claim.json": self.claim_json(kind, k), "notes.md": notes}
         if kind == "search":
-            files["best.json"] = json.dumps(self.tree.claims[k]["best"], indent=1)
+            best = self.tree.claims[k]["best"] if self.problem.get("notes", True) else []
+            files["best.json"] = json.dumps(best, indent=1)
         id = self.inlet.submit(worker, goal, self.verify(), files,
                                tokens, self.cfg.get("retries", 1), self.cfg.get("memory_mb", 8192))
         self.record({"ev": "submit", "id": id, "kind": kind, "claim": k, "phase": "work", "tokens": tokens, "seeded": notes})
@@ -255,6 +256,24 @@ def show(run, top=12):
         print(f"  L_{k}  {c['status']:7} d{c['depth']} S={S[k]:.3f} t={c['t']:.2f} fails={c['fails']}  {c['statement'][:80]}")
 
 
+def curve(run):
+    """Tokens spent and the best score so far, one row per search result, and
+    for a proof run, the tokens at which the root was settled."""
+    spent, best = 0, None
+    with open(run.path) as f:
+        for line in f:
+            e = json.loads(line)
+            if e["ev"] != "settle":
+                continue
+            spent += e.get("used", 0)
+            if e["kind"] == "search" and e.get("outcome") == "accepted":
+                best = e["score"] if best is None else max(best, e["score"])
+                print(f"{spent:>10} {best}")
+            elif e["kind"] == "cert" and e.get("outcome") == "accepted":
+                print(f"{spent:>10} settled")
+    print(f"{run.spent:>10} total")
+
+
 def init(problem_path, dir):
     with open(problem_path) as f:
         problem = json.load(f)
@@ -271,11 +290,12 @@ def init(problem_path, dir):
 USAGE = """levin init <problem.json> <dir>
 levin run <dir>
 levin show <dir>
+levin curve <dir>
 levin cert <dir>"""
 
 
 def main(argv=sys.argv[1:]):
-    if len(argv) < 2 or argv[0] not in ("init", "run", "show", "cert") or (argv[0] == "init" and len(argv) < 3):
+    if len(argv) < 2 or argv[0] not in ("init", "run", "show", "curve", "cert") or (argv[0] == "init" and len(argv) < 3):
         sys.exit(USAGE)
     if argv[0] == "init":
         return init(argv[1], argv[2])
@@ -284,6 +304,8 @@ def main(argv=sys.argv[1:]):
         run.loop()
     elif argv[0] == "show":
         show(run)
+    elif argv[0] == "curve":
+        curve(run)
     else:
         cert = run.tree.certificate()
         if cert is None:

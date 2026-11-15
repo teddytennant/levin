@@ -85,7 +85,10 @@ class Tree:
         self.defs = []
         self.picks = {}
         self.guesses = 0
-        statement = problem["statement"]
+        statement = problem.get("statement")
+        if statement is None:
+            self.roots.append(self.add(problem["goal"], 1.0, 0, falsified=True)["key"])
+            return
         if "ANSWER" in statement:
             return
         p = self.add(statement, clamp(self.cfg["truth"], 0, 1), 0, falsified=True, rate=self.cfg["root_rate"])
@@ -232,7 +235,7 @@ class Tree:
     def search_side(self):
         """The root a construction found by search would settle."""
         score = self.problem.get("score")
-        if not score or "ANSWER" in self.problem["statement"]:
+        if not score or "ANSWER" in self.problem.get("statement", ""):
             return None
         side = 0 if score.get("proves") == "statement" else -1
         return self.roots[side]
@@ -260,18 +263,21 @@ class Tree:
             if k in busy:
                 continue
             gain = g[k] * (1 - S[k])
-            if not c["falsified"]:
+            if "statement" not in self.problem:
+                gain = 1.0
+            elif not c["falsified"]:
                 out.append((gain * c["t"] * self.p(c) / cost["falsify"], "falsify", k))
                 continue
-            out.append((gain * c["t"] * self.p(c) / cost["prove"], "prove", k))
-            if c["depth"] < self.cfg["max_depth"] and len(self.live(c)) < self.cfg["max_sketches"]:
+            if "statement" in self.problem:
+                out.append((gain * c["t"] * self.p(c) / cost["prove"], "prove", k))
+            if "statement" in self.problem and c["depth"] < self.cfg["max_depth"] and len(self.live(c)) < self.cfg["max_sketches"]:
                 valid = self.mean(self.cfg["sketch_rate"], c["sketch_fails"])
                 out.append((gain * valid * c["t"] * self.fresh_sketch() / cost["decompose"], "decompose", k))
             target = self.problem.get("score", {}).get("target")
             if k == self.search_side() and not (c["best"] and target is not None and c["best"][0]["score"] >= target):
                 found = self.mean(self.cfg["search_rate"], c["search_fails"])
                 out.append((gain * c["t"] * found / cost["search"], "search", k))
-        if "ANSWER" in self.problem["statement"] and self.guesses < self.cfg["max_guesses"] and "guess" not in busy:
+        if "ANSWER" in self.problem.get("statement", "") and self.guesses < self.cfg["max_guesses"] and "guess" not in busy:
             left = 1 - min(1.0, sum(S[r] for r in self.roots))
             out.append((left * self.cfg["guess_value"] / cost["guess"], "guess", None))
         if self.cfg["planner"] == "round_robin":
