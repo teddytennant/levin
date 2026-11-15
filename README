@@ -255,6 +255,28 @@ by the luck of that one attempt. What they do show is that levin runs no
 extra tasks when a direct proof lands. The comparison that matters needs
 problems a single attempt almost never solves.
 
+So the third run shrank the attempts instead: the second set again, with
+each task cut to 4 agent turns and 40k tokens, no retries, and 600k tokens
+per arm, so that one attempt rarely lands and the planner has to choose:
+
+    statement                                    best-of-N    levin  round-robin
+    ∀ x y, x*x = 2*(y*y) → x = 0                  yes 62k   yes 57k     yes 23k
+    ∀ n, 4 ≤ n → n*n ≤ 2^n                        yes 21k   yes 39k     yes 22k
+    Σ i<n, i^3 = (Σ i<n, i)^2                     yes 113k  yes 31k     yes 76k
+    ∀ n > 1, n^4 + 4 has a proper factorization   no 583k   no 583k     no 586k
+    6 Σ i≤n, i^2 = n(n+1)(2n+1)                   no 564k   no 576k     yes 236k
+    ∀ a b, 0 < b → a*a ≠ 3*(b*b)                  yes 221k  yes 76k     yes 500k
+
+On the four that all three settled, levin spent 201k tokens, best-of-N 413k
+and round-robin 619k. But round-robin, which splits problems without
+weighing them, was the only arm to settle the sum of squares. Six problems
+and one run each is too few to call: this is noise with a hint that levin
+gets there cheaper when it gets there. These runs also found a bug, a worker
+that ran out of turns was counted as a crash rather than a failed attempt,
+so the planner did not learn from it; the last two rows ran partly before
+the fix. A real answer needs dozens of problems, several seeds, and
+confidence intervals.
+
 
 Where to point it
 
