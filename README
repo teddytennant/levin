@@ -267,15 +267,35 @@ per arm, so that one attempt rarely lands and the planner has to choose:
     6 Σ i≤n, i^2 = n(n+1)(2n+1)                   no 564k   no 576k     yes 236k
     ∀ a b, 0 < b → a*a ≠ 3*(b*b)                  yes 221k  yes 76k     yes 500k
 
-On the four that all three settled, levin spent 201k tokens, best-of-N 413k
-and round-robin 619k. But round-robin, which splits problems without
-weighing them, was the only arm to settle the sum of squares. Six problems
-and one run each is too few to call: this is noise with a hint that levin
-gets there cheaper when it gets there. These runs also found a bug, a worker
-that ran out of turns was counted as a crash rather than a failed attempt,
-so the planner did not learn from it; the last two rows ran partly before
-the fix. A real answer needs dozens of problems, several seeds, and
-confidence intervals.
+These runs also found a bug: a worker that ran out of turns was counted as a
+crash rather than a failed attempt, so the planner did not learn from it.
+The last two rows ran partly before the fix.
+
+Twelve more statements under the same settings, after the fix:
+
+    statement                                    best-of-N    levin  round-robin
+    2 Σ i≤n, i = n(n+1)                           yes 16k   yes 38k     yes 60k
+    Σ i<n, (2i+1) = n^2                           yes 13k   yes 33k     yes 107k
+    4 Σ i≤n, i^3 = (n(n+1))^2                     yes 50k   yes 345k    yes 153k
+    Σ i<n, 2^i + 1 = 2^n                          yes 16k   yes 63k     yes 127k
+    3 Σ i<n, i(i+1) = (n-1)n(n+1)                 yes 301k  yes 486k    yes 16k
+    3 ∣ 4^n + 5                                   yes 52k   yes 32k     yes 71k
+    7 ∣ 8^n + 6                                   yes 48k   yes 16k     yes 48k
+    9 ∣ 4^n + 6n - 1                              yes 40k   yes 19k     yes 22k
+    3 ≤ n → 2n + 1 < 2^n                          yes 36k   yes 35k     yes 52k
+    5 ≤ n → n^2 < 2^n                             yes 458k  yes 45k     yes 114k
+    x*x = 5*(y*y) → x = 0                         yes 54k   yes 328k    yes 185k
+    x*x = 6*(y*y) → x = 0                         yes 53k   yes 59k     yes 271k
+
+Over all eighteen: best-of-N settled 16, levin 16, round-robin 17. On the
+16 all three settled, best-of-N spent 1,557k tokens, levin 1,706k and
+round-robin 1,853k, and levin beat best-of-N on 8 of them and lost on 8. No
+arm settled anything another missed except round-robin's one. So on these
+problems the beliefs bought nothing measurable over independent attempts.
+The likely reason is the problems: a 4-turn Haiku attempt still lands on
+most of them directly, and the planner only has room to matter when
+splitting is the only way through. Whether levin beats a swarm there is
+still open; this bench does not show it.
 
 
 Where to point it
