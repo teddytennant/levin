@@ -246,8 +246,8 @@ turns), 1.2M tokens per arm, 200k per prove task:
 
 Every arm settled every statement with its first task, so these runs say
 nothing about the planner: one attempt was enough, and the arms differ only
-by the luck of that one attempt. What they do show is that levin costs
-nothing extra when a direct proof lands. The comparison that matters needs
+by the luck of that one attempt. What they do show is that levin runs no
+extra tasks when a direct proof lands. The comparison that matters needs
 problems a single attempt almost never solves.
 
 
